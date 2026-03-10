@@ -3,55 +3,51 @@ from typing import Optional
 from db.database import get_weekly_schedule, get_homework_for_date
 
 async def get_full_homework_with_weekly(target_date: date) -> dict:
-    """
-    Возвращает словарь предмет -> задание (None, если нет) для указанной даты.
-    """
-    # 1. Получаем добавленные ДЗ из базы
-    manual = await get_homework_for_date(target_date)
+    # Обязательно передаем дату как строку (isoformat), иначе база данных может глючить
+    manual = await get_homework_for_date(target_date.isoformat())
     
-    # 2. Получаем базовое расписание на этот день недели
     day_of_week = target_date.weekday()
     subjects = await get_weekly_schedule(day_of_week)
     
-    # Если расписания на этот день нет (например, в воскресенье)
     if not subjects:
         subjects = []
         
     result = {}
     
-    # 3. Сначала выстраиваем предметы по расписанию
+    # Создаем словарь предметов в нижнем регистре для умного поиска
+    schedule_subjects_lower = {s.lower(): s for s in subjects}
+    
+    # Сначала заполняем расписание пустыми значениями
     for subject in subjects:
-        result[subject] = manual.get(subject)
+        result[subject] = None
         
-    # 4. Если добавили ДЗ по предмету, которого вдруг нет в расписании,
-    # добавляем его в конец списка, чтобы оно не потерялось
-    for subject, task in manual.items():
-        if subject not in result:
-            result[subject] = task
+    # Теперь накладываем ручные ДЗ
+    for manual_subj, task in manual.items():
+        manual_subj_lower = manual_subj.lower()
+        
+        # Если предмет есть в расписании (независимо от регистра)
+        if manual_subj_lower in schedule_subjects_lower:
+            real_subj = schedule_subjects_lower[manual_subj_lower]
+            result[real_subj] = task
+        else:
+            # Если предмета вообще нет в расписании, добавляем его в конец
+            result[manual_subj] = task
             
     return result
 
 async def get_week_homework(start_date: date) -> dict[date, dict[str, Optional[str]]]:
-    """
-    Возвращает словарь {дата: {предмет: задание}} для 7 дней.
-    """
     week = {}
     for i in range(7):
         current_date = start_date + timedelta(days=i)
         homework = await get_full_homework_with_weekly(current_date)
         week[current_date] = homework
     return week
-# Добавь этот код в самый низ файла services/homework_service.py
 
 async def get_next_lesson_date(subject: str) -> Optional[date]:
-    """Ищет ближайшую дату (начиная с завтрашнего дня), когда по расписанию есть этот предмет"""
     today = date.today()
-    # Ищем на 14 дней вперед
     for i in range(1, 15):
         check_date = today + timedelta(days=i)
         schedule = await get_weekly_schedule(check_date.weekday())
-        
-        # Сравниваем предметы без учета больших/маленьких букв (Химия == химия)
         if schedule:
             for sched_subject in schedule:
                 if sched_subject.lower() == subject.lower():
