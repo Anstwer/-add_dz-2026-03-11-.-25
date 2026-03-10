@@ -1,38 +1,39 @@
-from datetime import date
-from typing import Optional# <-- добавлено
-from db.database import (
-    get_schedule_for_date,
-    get_weekly_schedule,
-    get_homework_for_date  # <-- используем эту функцию
-)
+from datetime import date, timedelta
+from typing import Optional
+from db.database import get_weekly_schedule, get_homework_for_date
 
 async def get_full_homework_with_weekly(target_date: date) -> dict:
     """
     Возвращает словарь предмет -> задание (None, если нет) для указанной даты.
     """
-    # Получаем ручные записи
-    manual = await get_homework_for_date(target_date)  # <-- изменено
+    # 1. Получаем добавленные ДЗ из базы
+    manual = await get_homework_for_date(target_date)
     
-    # Пытаемся получить переопределённое расписание на дату
-    subjects = await get_schedule_for_date(target_date)
+    # 2. Получаем базовое расписание на этот день недели
+    day_of_week = target_date.weekday()
+    subjects = await get_weekly_schedule(day_of_week)
     
-    # Если нет переопределения, пробуем получить из еженедельного
+    # Если расписания на этот день нет (например, в воскресенье)
     if not subjects:
-        day_of_week = target_date.weekday()
-        subjects = await get_weekly_schedule(day_of_week)
-    
-    # Если и еженедельного нет, возвращаем только ручные
-    if not subjects:
-        return manual
-    
-    # Формируем результат
+        subjects = []
+        
     result = {}
+    
+    # 3. Сначала выстраиваем предметы по расписанию
     for subject in subjects:
-        result[subject] = manual.get(subject)  # None, если нет задания
+        result[subject] = manual.get(subject)
+        
+    # 4. Если добавили ДЗ по предмету, которого вдруг нет в расписании,
+    # добавляем его в конец списка, чтобы оно не потерялось
+    for subject, task in manual.items():
+        if subject not in result:
+            result[subject] = task
+            
     return result
+
 async def get_week_homework(start_date: date) -> dict[date, dict[str, Optional[str]]]:
     """
-    Возвращает словарь {дата: {предмет: задание}} для 7 дней, начиная с start_date.
+    Возвращает словарь {дата: {предмет: задание}} для 7 дней.
     """
     week = {}
     for i in range(7):
