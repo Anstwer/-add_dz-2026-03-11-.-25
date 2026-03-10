@@ -4,11 +4,15 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 import config
-from db.database import add_homework, delete_homework, get_homework_for_date
+from db.database import (
+    add_homework, delete_homework, get_homework_for_date,
+    set_weekly_schedule, get_all_weekly_schedule, delete_weekly_schedule  # <-- добавлено
+)
 
 router = Router()
+admin_filter = F.from_user.id == config.ADMIN_ID
 
-# Фильтр: только администратор
+# ... остальной код без изменений ...
 admin_filter = F.from_user.id == config.ADMIN_ID
 def day_name_to_int(day_str: str) -> int | None:
     """Преобразует название дня недели в число 0-6 (пн-вс)"""
@@ -147,3 +151,4 @@ async def cmd_list_dz(message: Message, command: CommandObject):
         lines.append(f"🔸 <b>{subject}</b>: {task}")
 
     await message.answer("\n".join(lines))
+
