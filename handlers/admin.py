@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import re
+import difflib
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -7,12 +8,11 @@ from aiogram.types import Message
 from aiogram.enums import ParseMode
 
 from db.database import add_homework, delete_homework, get_homework_for_date
-from services.homework_service import get_next_lesson_date
+from services.homework_service import get_next_lesson_date, get_all_known_subjects
 
 router = Router()
 
 def parse_smart_date(date_str: str) -> date | None:
-    """Умный парсер дат: понимает 'завтра', 'пн', '15.05' и '2024-05-15'"""
     date_str = date_str.lower()
     today = date.today()
     
@@ -20,22 +20,19 @@ def parse_smart_date(date_str: str) -> date | None:
     if date_str == "завтра": return today + timedelta(days=1)
     if date_str == "послезавтра": return today + timedelta(days=2)
     
-    # Дни недели
     weekdays = {"пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6}
     if date_str in weekdays:
         target_wd = weekdays[date_str]
         current_wd = today.weekday()
         days_ahead = target_wd - current_wd
-        if days_ahead <= 0: # Если сегодня вторник, а просят "пн", значит следующий понедельник
+        if days_ahead <= 0:
             days_ahead += 7
         return today + timedelta(days=days_ahead)
         
-    # Формат ГГГГ-ММ-ДД
     if re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
         try: return date.fromisoformat(date_str)
         except ValueError: return None
         
-    # Формат ДД.ММ (например 15.05)
     match = re.match(r"^(\d{2})\.(\d{2})$", date_str)
     if match:
         day, month = int(match.group(1)), int(match.group(2))
@@ -58,18 +55,52 @@ async def cmd_add_dz(message: Message, command: CommandObject):
         )
         return
 
-    args = command.args.split(maxsplit=1)
-    if len(args) < 2:
-        await message.answer("❌ Нужно указать предмет и задание.")
-        return
-        
-    subject = args[0]
-    rest = args[1]
+    raw_text = command.args.strip()
+    known_subjects = await get_all_known_subjects()
     
-    # Пробуем вытащить дату из текста после предмета
-    rest_parts = rest.split(maxsplit=1)
+    subject = None
+    rest_text = ""
+    
+    # 1. Ищем точное совпадение предмета (даже если он из двух слов, например "Русский язык")
+    if known_subjects:
+        # Сортируем от длинных к коротким, чтобы "Русский язык" проверялся раньше "Русский"
+        known_subjects.sort(key=len, reverse=True)
+        for known_subj in known_subjects:
+            if raw_text.lower().startswith(known_subj.lower()):
+                subject = known_subj
+                # Отрезаем название предмета, оставляем только дату и текст ДЗ
+                rest_text = raw_text[len(known_subj):].strip()
+                break
+                
+    # 2. Если точного совпадения нет, пробуем найти опечатку по первому слову
+    if not subject and known_subjects:
+        first_word = raw_text.split()[0]
+        known_subjects_lower = {s.lower(): s for s in known_subjects}
+        matches = difflib.get_close_matches(first_word.lower(), known_subjects_lower.keys(), n=1, cutoff=0.5)
+        
+        if matches:
+            subject = known_subjects_lower[matches[0]]
+            rest_text = raw_text[len(first_word):].strip()
+            
+    # 3. Если предмет всё равно не найден (ввели абракадабру)
+    if not subject:
+        subjects_list = ", ".join(known_subjects) if known_subjects else "Расписание пустое!"
+        await message.answer(
+            f"❌ <b>Предмет не распознан!</b> Вы ввели несуществующий предмет.\n\n"
+            f"📚 <b>Доступные предметы из расписания:</b>\n{subjects_list}\n\n"
+            f"<i>Пожалуйста, выберите предмет из списка.</i>", 
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    if not rest_text:
+        await message.answer("❌ Вы указали предмет, но забыли написать само задание!")
+        return
+
+    # Пробуем вытащить дату из оставшегося текста
+    rest_parts = rest_text.split(maxsplit=1)
     target_date = None
-    task = rest
+    task = rest_text
     
     if len(rest_parts) == 2:
         possible_date_str = rest_parts[0]
@@ -78,7 +109,7 @@ async def cmd_add_dz(message: Message, command: CommandObject):
             target_date = parsed_date
             task = rest_parts[1]
             
-    # Если дату не указали (или написали обычный текст), ищем следующий урок по расписанию
+    # Если дату не указали, ищем следующий урок по расписанию
     if not target_date:
         target_date = await get_next_lesson_date(subject)
         if not target_date:
@@ -104,12 +135,33 @@ async def cmd_del_dz(message: Message, command: CommandObject):
         await message.answer("❌ Использование: <code>/del_dz Предмет [дата/день недели]</code>", parse_mode=ParseMode.HTML)
         return
         
-    args = command.args.split(maxsplit=1)
-    subject = args[0]
+    raw_text = command.args.strip()
+    known_subjects = await get_all_known_subjects()
+    subject = None
+    rest_text = ""
+    
+    if known_subjects:
+        known_subjects.sort(key=len, reverse=True)
+        for known_subj in known_subjects:
+            if raw_text.lower().startswith(known_subj.lower()):
+                subject = known_subj
+                rest_text = raw_text[len(known_subj):].strip()
+                break
+                
+    if not subject and known_subjects:
+        first_word = raw_text.split()[0]
+        known_subjects_lower = {s.lower(): s for s in known_subjects}
+        matches = difflib.get_close_matches(first_word.lower(), known_subjects_lower.keys(), n=1, cutoff=0.5)
+        if matches:
+            subject = known_subjects_lower[matches[0]]
+            rest_text = raw_text[len(first_word):].strip()
+            
+    if not subject:
+        subject = raw_text.split()[0] # Если не нашли, берем первое слово как есть
     
     target_date = None
-    if len(args) == 2:
-        target_date = parse_smart_date(args[1])
+    if rest_text:
+        target_date = parse_smart_date(rest_text)
         
     if not target_date:
         target_date = await get_next_lesson_date(subject)
