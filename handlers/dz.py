@@ -1,3 +1,4 @@
+from services.homework_service import get_week_homework
 from datetime import date, timedelta
 import re
 from aiogram import Router
@@ -37,5 +38,14 @@ async def cmd_dz(message: Message, command: CommandObject):
     text = format_homework_message(target_date, homework)
 
     await message.answer(text)
+@router.message(Command("week"))
+async def cmd_week(message: Message):
+    # Определяем понедельник текущей недели
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    week_data = await get_week_homework(monday)
+    text = format_week_message(week_data)
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
 
 
