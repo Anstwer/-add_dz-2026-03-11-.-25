@@ -14,6 +14,7 @@ async def init_weekly_schedule():
 DB_PATH = "homework.db"
 
 async def init_db():
+    await init_weekly_schedule()
     """Создание таблицы, если её нет"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('''
@@ -59,3 +60,4 @@ async def get_homework_for_date(hw_date: date) -> Dict[str, str]:
             rows = await cursor.fetchall()
 
             return {row[0]: row[1] for row in rows}
+
