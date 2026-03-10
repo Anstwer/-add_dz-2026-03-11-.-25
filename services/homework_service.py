@@ -1,4 +1,5 @@
-from datetime import date  # <-- добавлено
+from datetime import date
+from typing import Optional# <-- добавлено
 from db.database import (
     get_schedule_for_date,
     get_weekly_schedule,
