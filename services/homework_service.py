@@ -1,22 +1,23 @@
-from db.database import get_schedule_for_date, get_weekly_schedule, get_all_manual_homework_for_date
+from datetime import date  # <-- добавлено
+from db.database import (
+    get_schedule_for_date,
+    get_weekly_schedule,
+    get_homework_for_date  # <-- используем эту функцию
+)
 
 async def get_full_homework_with_weekly(target_date: date) -> dict:
     """
     Возвращает словарь предмет -> задание (None, если нет) для указанной даты.
-    Приоритет:
-    1. Если есть переопределение расписания на конкретную дату (таблица schedule), используем его.
-    2. Иначе берём расписание из weekly_schedule по дню недели.
-    3. Если и там нет – возвращаем только ручные записи.
     """
-    # Получаем ручные записи (они всегда приоритетны для заданий)
-    manual = await get_all_manual_homework_for_date(target_date)
+    # Получаем ручные записи
+    manual = await get_homework_for_date(target_date)  # <-- изменено
     
     # Пытаемся получить переопределённое расписание на дату
     subjects = await get_schedule_for_date(target_date)
     
     # Если нет переопределения, пробуем получить из еженедельного
     if not subjects:
-        day_of_week = target_date.weekday()  # 0=пн, 6=вс
+        day_of_week = target_date.weekday()
         subjects = await get_weekly_schedule(day_of_week)
     
     # Если и еженедельного нет, возвращаем только ручные
