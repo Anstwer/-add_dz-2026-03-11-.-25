@@ -1,7 +1,16 @@
 import aiosqlite
 from datetime import date
 from typing import Dict, Optional
-
+async def init_weekly_schedule():
+    """Создание таблицы еженедельного расписания"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_schedule (
+                day INTEGER PRIMARY KEY,  -- 0=пн, 1=вт, ..., 6=вс
+                subjects TEXT NOT NULL
+            )
+        ''')
+        await db.commit()
 DB_PATH = "homework.db"
 
 async def init_db():
@@ -48,4 +57,5 @@ async def get_homework_for_date(hw_date: date) -> Dict[str, str]:
             ORDER BY subject
         ''', (hw_date.isoformat(),)) as cursor:
             rows = await cursor.fetchall()
+
             return {row[0]: row[1] for row in rows}
