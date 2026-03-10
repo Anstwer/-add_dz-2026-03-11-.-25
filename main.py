@@ -10,11 +10,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import config
-from db.database import init_db
+from db.database import init_db  # <-- импортируем правильную функцию
 from handlers import common, dz, admin
 from services.daily import send_daily_homework
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -25,39 +24,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создаём сессию с увеличенным таймаутом (60 секунд)
 session = AiohttpSession(timeout=60)
 bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML, session=session)
 dp = Dispatcher(storage=MemoryStorage())
 
 async def on_startup():
     """Действия при запуске бота"""
-    
-    async def init_db():
-    """Создание всех таблиц"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS homework (
-                subject TEXT NOT NULL,
-                date TEXT NOT NULL,
-                task TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (subject, date)
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS schedule (
-                date TEXT PRIMARY KEY,
-                subjects TEXT NOT NULL
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS weekly_schedule (
-                day INTEGER PRIMARY KEY,
-                subjects TEXT NOT NULL
-            )
-        ''')
-        await db.commit()
+    await init_db()  # <-- вызываем импортированную функцию
     try:
         await bot.send_message(config.ADMIN_ID, "✅ Бот запущен и готов к работе!")
     except Exception as e:
@@ -65,7 +38,8 @@ async def on_startup():
 
 async def on_shutdown():
     logger.info("Бот останавливается...")
-# --- ВЕБ-СЕРВЕР ЗАГЛУШКА ДЛЯ RENDER ---
+
+# Веб-заглушка для Render
 async def handle_ping(request):
     return web.Response(text="Бот Стёпы работает!")
 
@@ -74,23 +48,21 @@ async def start_dummy_server():
     app.router.add_get('/', handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    # Render автоматически задает переменную окружения PORT
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logging.info(f"Веб-заглушка запущена на порту {port}")
+    logger.info(f"Веб-заглушка запущена на порту {port}")
+
 async def main():
     await start_dummy_server()
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # Регистрация роутеров
     dp.include_router(common.router)
     dp.include_router(dz.router)
     dp.include_router(admin.router)
 
-    # Планировщик для ежедневной рассылки (каждый день в 16:00)
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")  # Укажите свой часовой пояс
+    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(
         send_daily_homework,
         trigger=CronTrigger(hour=16, minute=0),
@@ -98,11 +70,8 @@ async def main():
     )
     scheduler.start()
     logger.info("Планировщик запущен, рассылка запланирована на 16:00")
-    
 
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
