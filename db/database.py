@@ -60,4 +60,42 @@ async def get_homework_for_date(hw_date: date) -> Dict[str, str]:
             rows = await cursor.fetchall()
 
             return {row[0]: row[1] for row in rows}
+async def set_weekly_schedule(day: int, subjects_list: list):
+    """Сохранить расписание на конкретный день недели (заменить существующее)"""
+    subjects_str = ','.join(subjects_list)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            INSERT OR REPLACE INTO weekly_schedule (day, subjects)
+            VALUES (?, ?)
+        ''', (day, subjects_str))
+        await db.commit()
+
+async def get_weekly_schedule(day: int) -> list:
+    """Получить список предметов для дня недели (пустой список, если нет)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('''
+            SELECT subjects FROM weekly_schedule WHERE day = ?
+        ''', (day,)) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return row[0].split(',')
+            return []
+
+async def get_all_weekly_schedule() -> dict:
+    """Получить всё еженедельное расписание в виде словаря {день: [предметы]}"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('''
+            SELECT day, subjects FROM weekly_schedule ORDER BY day
+        ''') as cursor:
+            rows = await cursor.fetchall()
+            return {day: subjects.split(',') for day, subjects in rows}
+
+async def delete_weekly_schedule(day: int):
+    """Удалить расписание для дня недели"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            DELETE FROM weekly_schedule WHERE day = ?
+        ''', (day,))
+        await db.commit()
+
 
