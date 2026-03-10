@@ -1,10 +1,9 @@
 from datetime import date
+import html
 
-# Дни недели на русском
 WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
 def format_homework_message(target_date: date, homework: dict) -> str:
-    """Красивый вывод ДЗ на один день"""
     weekday_str = WEEKDAYS[target_date.weekday()]
     date_str = target_date.strftime("%d.%m.%Y")
     
@@ -14,18 +13,20 @@ def format_homework_message(target_date: date, homework: dict) -> str:
     lines = [f"📅 <b>{weekday_str} ({date_str})</b>\n"]
     
     for i, (subject, task) in enumerate(homework.items(), 1):
-        # Если задание есть, пишем его курсивом, если нет — пишем "Не задано"
-        task_text = f"<i>{task}</i>" if task else "<i>Не задано</i>"
-        lines.append(f"<b>{i}. {subject}</b>\n   └ {task_text}")
+        # Экранируем текст, чтобы Telegram не выдавал ошибку из-за спецсимволов
+        safe_subj = html.escape(subject)
+        if task:
+            safe_task = html.escape(task)
+            lines.append(f"<b>{i}. {safe_subj}</b>\n   └ <i>{safe_task}</i>")
+        else:
+            lines.append(f"<b>{i}. {safe_subj}</b>\n   └ <i>Не задано</i>")
         
     return "\n".join(lines)
 
 def format_week_message(week_data: dict) -> str:
-    """Красивый вывод ДЗ на всю неделю"""
     lines = ["🗓 <b>РАСПИСАНИЕ НА НЕДЕЛЮ</b>\n"]
     
     for current_date, homework in week_data.items():
-        # Пропускаем воскресенье, если там нет уроков и ДЗ
         if current_date.weekday() == 6 and not homework:
             continue
             
@@ -39,11 +40,13 @@ def format_week_message(week_data: dict) -> str:
             continue
             
         for subject, task in homework.items():
-            task_text = task if task else "Не задано"
-            # Используем разные эмодзи: 📝 если есть ДЗ, ➖ если нет
-            icon = "📝" if task else "➖"
-            lines.append(f"   {icon} <b>{subject}:</b> {task_text}")
+            safe_subj = html.escape(subject)
+            if task:
+                safe_task = html.escape(task)
+                lines.append(f"   📝 <b>{safe_subj}:</b> {safe_task}")
+            else:
+                lines.append(f"   ➖ <b>{safe_subj}:</b> Не задано")
             
-        lines.append("") # Пустая строка между днями для красоты
+        lines.append("")
         
     return "\n".join(lines)
