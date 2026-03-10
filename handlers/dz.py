@@ -1,10 +1,10 @@
-from datetime import date, timedelta
+rom datetime import date, timedelta
 import re
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from db.database import get_full_homework_with_weekly
+from services.homework_service import get_full_homework_with_weekly  # <-- исправлено
 from utils.formatter import format_homework_message
 
 router = Router()
@@ -37,3 +37,4 @@ async def cmd_dz(message: Message, command: CommandObject):
     text = format_homework_message(target_date, homework)
 
     await message.answer(text)
+
