@@ -32,8 +32,32 @@ dp = Dispatcher(storage=MemoryStorage())
 
 async def on_startup():
     """Действия при запуске бота"""
-    await init_db()
-    logger.info("Бот запущен, база данных инициализирована")
+    
+    async def init_db():
+    """Создание всех таблиц"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS homework (
+                subject TEXT NOT NULL,
+                date TEXT NOT NULL,
+                task TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (subject, date)
+            )
+        ''')
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS schedule (
+                date TEXT PRIMARY KEY,
+                subjects TEXT NOT NULL
+            )
+        ''')
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_schedule (
+                day INTEGER PRIMARY KEY,
+                subjects TEXT NOT NULL
+            )
+        ''')
+        await db.commit()
     try:
         await bot.send_message(config.ADMIN_ID, "✅ Бот запущен и готов к работе!")
     except Exception as e:
@@ -80,4 +104,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
