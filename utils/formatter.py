@@ -35,6 +35,5 @@ def format_week_message(week_data: dict[date, dict[str, Optional[str]]]) -> str:
                     lines.append(f"   🔸 {subject}: Стёпа не добавил данные")
                 else:
                     lines.append(f"   🔸 {subject}: {task}")
-    # Оборачиваем всё в <pre>
-    return f"<pre>{chr(10).join(lines)}</pre>"
-
+    # Объединяем строки с переносом и оборачиваем в <pre>
+    return "<pre>" + "\n".join(lines) + "</pre>"
