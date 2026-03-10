@@ -56,6 +56,7 @@ async def start_dummy_server():
     await site.start()
     logging.info(f"Веб-заглушка запущена на порту {port}")
 async def main():
+    await start_dummy_server()
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
@@ -73,9 +74,10 @@ async def main():
     )
     scheduler.start()
     logger.info("Планировщик запущен, рассылка запланирована на 16:00")
-    await start_dummy_server()
+    
 
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
