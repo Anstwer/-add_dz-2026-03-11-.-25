@@ -1,3 +1,5 @@
+import os
+from aiohttp import web
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
@@ -39,7 +41,20 @@ async def on_startup():
 
 async def on_shutdown():
     logger.info("Бот останавливается...")
+# --- ВЕБ-СЕРВЕР ЗАГЛУШКА ДЛЯ RENDER ---
+async def handle_ping(request):
+    return web.Response(text="Бот Стёпы работает!")
 
+async def start_dummy_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render автоматически задает переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Веб-заглушка запущена на порту {port}")
 async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
@@ -58,6 +73,7 @@ async def main():
     )
     scheduler.start()
     logger.info("Планировщик запущен, рассылка запланирована на 16:00")
+    await start_dummy_server()
 
     await dp.start_polling(bot)
 
