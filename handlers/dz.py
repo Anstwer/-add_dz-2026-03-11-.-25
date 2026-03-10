@@ -1,14 +1,13 @@
-from services.homework_service import get_week_homework
 from datetime import date, timedelta
-
-from utils.formatter import format_week_message
 import re
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
+from aiogram.enums import ParseMode  # <-- ВАЖНО: импорт для работы HTML-тегов
 
-from services.homework_service import get_full_homework_with_weekly  # <-- исправлено
-from utils.formatter import format_homework_message
+from services.homework_service import get_full_homework_with_weekly, get_week_homework
+from utils.formatter import format_homework_message, format_week_message
 
 router = Router()
 
@@ -21,7 +20,6 @@ def parse_date_arg(arg: str | None) -> date | None:
         return date.today()
     if arg == "завтра":
         return date.today() + timedelta(days=1)
-    # Проверка формата YYYY-MM-DD
     if re.match(r"^\d{4}-\d{2}-\d{2}$", arg):
         try:
             return date.fromisoformat(arg)
@@ -39,16 +37,15 @@ async def cmd_dz(message: Message, command: CommandObject):
     homework = await get_full_homework_with_weekly(target_date)
     text = format_homework_message(target_date, homework)
 
-    await message.answer(text)
+    # <-- ВАЖНО: добавили parse_mode=ParseMode.HTML
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
 @router.message(Command("week"))
 async def cmd_week(message: Message):
-    # Определяем понедельник текущей недели
     today = date.today()
     monday = today - timedelta(days=today.weekday())
     week_data = await get_week_homework(monday)
     text = format_week_message(week_data)
+    
+    # <-- ВАЖНО: добавили parse_mode=ParseMode.HTML
     await message.answer(text, parse_mode=ParseMode.HTML)
-
-
-
-
