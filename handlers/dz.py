@@ -1,4 +1,4 @@
-rom datetime import date, timedelta
+from datetime import date, timedelta
 import re
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -37,4 +37,5 @@ async def cmd_dz(message: Message, command: CommandObject):
     text = format_homework_message(target_date, homework)
 
     await message.answer(text)
+
 
