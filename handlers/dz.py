@@ -1,5 +1,7 @@
 from services.homework_service import get_week_homework
 from datetime import date, timedelta
+
+from utils.formatter import format_week_message
 import re
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -46,6 +48,7 @@ async def cmd_week(message: Message):
     week_data = await get_week_homework(monday)
     text = format_week_message(week_data)
     await message.answer(text, parse_mode=ParseMode.HTML)
+
 
 
 
