@@ -41,3 +41,19 @@ async def get_week_homework(start_date: date) -> dict[date, dict[str, Optional[s
         homework = await get_full_homework_with_weekly(current_date)
         week[current_date] = homework
     return week
+# Добавь этот код в самый низ файла services/homework_service.py
+
+async def get_next_lesson_date(subject: str) -> Optional[date]:
+    """Ищет ближайшую дату (начиная с завтрашнего дня), когда по расписанию есть этот предмет"""
+    today = date.today()
+    # Ищем на 14 дней вперед
+    for i in range(1, 15):
+        check_date = today + timedelta(days=i)
+        schedule = await get_weekly_schedule(check_date.weekday())
+        
+        # Сравниваем предметы без учета больших/маленьких букв (Химия == химия)
+        if schedule:
+            for sched_subject in schedule:
+                if sched_subject.lower() == subject.lower():
+                    return check_date
+    return None
