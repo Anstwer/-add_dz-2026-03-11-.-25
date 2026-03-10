@@ -4,7 +4,7 @@ from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from db.database import get_homework_for_date
+from db.database import get_full_homework_with_weekly
 from utils.formatter import format_homework_message
 
 router = Router()
@@ -33,6 +33,7 @@ async def cmd_dz(message: Message, command: CommandObject):
         await message.answer("❌ Неверный формат даты. Используйте: /dz, /dz завтра, /dz ГГГГ-ММ-ДД")
         return
 
-    homework = await get_homework_for_date(target_date)
+    homework = await get_full_homework_with_weekly(target_date)
     text = format_homework_message(target_date, homework)
+
     await message.answer(text)
