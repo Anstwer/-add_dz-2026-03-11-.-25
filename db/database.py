@@ -39,6 +39,19 @@ async def init_db():
                 PRIMARY KEY (subject, date)
             )
         ''')
+        
+        # --- НОВОЕ: Безопасно добавляем колонки для фото и галочек ---
+        try:
+            await db.execute('ALTER TABLE homework ADD COLUMN photo_id TEXT')
+        except Exception:
+            pass # Если колонка уже есть, просто пропускаем
+            
+        try:
+            await db.execute('ALTER TABLE homework ADD COLUMN is_done INTEGER DEFAULT 0')
+        except Exception:
+            pass
+        # --------------------------------------------------------------
+
         # Таблица schedule (переопределение на конкретную дату)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS schedule (
@@ -49,16 +62,17 @@ async def init_db():
         await db.commit()
 
 # ---------- Homework ----------
-async def add_homework(subject: str, hw_date: date, task: str):
+async def add_homework(subject: str, hw_date: date, task: str, photo_id: str = None):
     """Добавить или обновить запись"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('''
-            INSERT INTO homework (subject, date, task)
-            VALUES (?, ?, ?)
+            INSERT INTO homework (subject, date, task, photo_id)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(subject, date) DO UPDATE SET
                 task = excluded.task,
+                photo_id = excluded.photo_id,
                 updated_at = CURRENT_TIMESTAMP
-        ''', (subject, hw_date, task))
+        ''', (subject, hw_date, task, photo_id))
         await db.commit()
 
 async def delete_homework(subject: str, hw_date: date):
@@ -70,16 +84,26 @@ async def delete_homework(subject: str, hw_date: date):
         ''', (subject, hw_date.isoformat()))
         await db.commit()
 
-async def get_homework_for_date(hw_date: date) -> Dict[str, str]:
-    """Получить все задания на конкретную дату в виде словаря {предмет: задание}"""
+async def get_homework_for_date(hw_date: date) -> Dict[str, dict]:
+    """Получить все задания на конкретную дату в виде словаря с деталями"""
+    # Защита от ошибки isoformat, если hw_date уже строка
+    date_str = hw_date if isinstance(hw_date, str) else hw_date.isoformat()
+    
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('''
-            SELECT subject, task FROM homework
+            SELECT subject, task, photo_id, is_done FROM homework
             WHERE date = ?
             ORDER BY subject
-        ''', (hw_date.isoformat(),)) as cursor:
+        ''', (date_str,)) as cursor:
             rows = await cursor.fetchall()
-            return {row[0]: row[1] for row in rows}
+            # Теперь возвращаем словарь, где хранится всё: текст, фото и статус
+            return {
+                row[0]: {
+                    "task": row[1],
+                    "photo_id": row[2],
+                    "is_done": row[3] or 0
+                } for row in rows
+            }
 
 # Псевдоним для совместимости с homework_service
 get_all_manual_homework_for_date = get_homework_for_date
@@ -145,6 +169,18 @@ async def delete_weekly_schedule(day: int):
             DELETE FROM weekly_schedule WHERE day = ?
         ''', (day,))
         await db.commit()
+async def toggle_is_done(subject: str, hw_date: date):
+    """Переключить статус выполнения домашки (0 -> 1, 1 -> 0)"""
+    date_str = hw_date if isinstance(hw_date, str) else hw_date.isoformat()
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            UPDATE homework
+            SET is_done = CASE WHEN is_done = 1 THEN 0 ELSE 1 END
+            WHERE subject = ? AND date = ?
+        ''', (subject, date_str))
+        await db.commit()
+
 
 
 
