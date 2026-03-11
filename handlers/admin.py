@@ -1,33 +1,126 @@
-
-
-
-# Убедись, что у тебя правильно импортирована база данных. 
-# Если твой файл называется database.py и лежит в папке db, то импорт выглядит так:
-# import db.database as db 
-# (или как он у тебя уже импортирован)
-from datetime import date, timedelta
 import re
 import difflib
+from datetime import date, timedelta
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from datetime import date, timedelta
-
-# Убедись, что у тебя правильно импортирована база данных. 
-# Если твой файл называется database.py и лежит в папке db, то импорт выглядит так:
-# import db.database as db 
-# (или как он у тебя уже импортирован)
-from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
 from aiogram.enums import ParseMode
 
-from db.database import add_homework, delete_homework, get_homework_for_date
+# Импортируем функции из базы данных и сервисов
+from db.database import add_homework, delete_homework, get_homework_for_date, get_weekly_schedule
 from services.homework_service import get_next_lesson_date, get_all_known_subjects
 
 router = Router()
+
+# ==========================================
+# ШАГ 2: ИНТЕРАКТИВНОЕ ДОБАВЛЕНИЕ (/add)
+# ==========================================
+
+class AddDzState(StatesGroup):
+    choosing_date = State()
+    choosing_subject = State()
+    writing_task = State()
+
+@router.message(Command("add"))
+async def cmd_add_interactive(message: Message, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="На завтра", callback_data="add_date_tomorrow")],
+        [InlineKeyboardButton(text="На послезавтра", callback_data="add_date_aftertomorrow")],
+        [InlineKeyboardButton(text="На понедельник", callback_data="add_date_monday")]
+    ])
+    await message.answer("📅 На какой день добавляем домашку?", reply_markup=kb)
+    await state.set_state(AddDzState.choosing_date)
+
+@router.callback_query(AddDzState.choosing_date, F.data.startswith("add_date_"))
+async def process_add_date(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split("_")[2]
+    today = date.today()
+    
+    if action == "tomorrow":
+        target_date = today + timedelta(days=1)
+    elif action == "aftertomorrow":
+        target_date = today + timedelta(days=2)
+    elif action == "monday":
+        days_ahead = 0 - today.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        target_date = today + timedelta(days=days_ahead)
+        
+    await state.update_data(target_date=target_date.isoformat())
+    
+    weekday = target_date.weekday()
+    subjects = await get_weekly_schedule(weekday)
+    
+    if not subjects:
+        await callback.message.edit_text(
+            f"На {target_date.strftime('%d.%m')} нет уроков по расписанию.\n"
+            f"Напиши название предмета вручную текстом:"
+        )
+        await state.set_state(AddDzState.choosing_subject)
+        return
+        
+    kb_builder = []
+    for subj in subjects:
+        kb_builder.append([InlineKeyboardButton(text=subj, callback_data=f"add_subj_{subj}")])
+        
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_builder)
+    await callback.message.edit_text(f"📅 Дата: <b>{target_date.strftime('%d.%m')}</b>\n📚 Выбери предмет:", reply_markup=kb, parse_mode=ParseMode.HTML)
+    await state.set_state(AddDzState.choosing_subject)
+
+@router.callback_query(AddDzState.choosing_subject, F.data.startswith("add_subj_"))
+async def process_add_subject(callback: CallbackQuery, state: FSMContext):
+    subject = callback.data.replace("add_subj_", "")
+    await state.update_data(subject=subject)
+    
+    await callback.message.edit_text(
+        f"📚 Предмет: <b>{subject}</b>\n\n"
+        f"✍️ Напиши задание текстом ИЛИ отправь фотографию (можно сразу с подписью):",
+        parse_mode=ParseMode.HTML
+    )
+    await state.set_state(AddDzState.writing_task)
+
+@router.message(AddDzState.choosing_subject, F.text)
+async def process_manual_subject(message: Message, state: FSMContext):
+    subject = message.text.strip()
+    await state.update_data(subject=subject)
+    
+    await message.answer(
+        f"📚 Предмет: <b>{subject}</b>\n\n"
+        f"✍️ Напиши задание текстом ИЛИ отправь фотографию (можно сразу с подписью):",
+        parse_mode=ParseMode.HTML
+    )
+    await state.set_state(AddDzState.writing_task)
+
+@router.message(AddDzState.writing_task, F.photo | F.text)
+async def process_add_task(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_date_str = data['target_date']
+    subject = data['subject']
+    
+    target_date = date.fromisoformat(target_date_str)
+    
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+        task_text = message.caption or "Фотография"
+    else:
+        photo_id = None
+        task_text = message.text
+        
+    await add_homework(subject, target_date, task_text, photo_id)
+    
+    await message.answer(
+        f"✅ Домашка по предмету <b>{subject}</b> на {target_date.strftime('%d.%m')} успешно сохранена!",
+        parse_mode=ParseMode.HTML
+    )
+    await state.clear()
+
+
+# ==========================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И СТАРЫЕ КОМАНДЫ
+# ==========================================
 
 def parse_smart_date(date_str: str) -> date | None:
     date_str = date_str.lower()
@@ -78,18 +171,14 @@ async def cmd_add_dz(message: Message, command: CommandObject):
     subject = None
     rest_text = ""
     
-    # 1. Ищем точное совпадение предмета (даже если он из двух слов, например "Русский язык")
     if known_subjects:
-        # Сортируем от длинных к коротким, чтобы "Русский язык" проверялся раньше "Русский"
         known_subjects.sort(key=len, reverse=True)
         for known_subj in known_subjects:
             if raw_text.lower().startswith(known_subj.lower()):
                 subject = known_subj
-                # Отрезаем название предмета, оставляем только дату и текст ДЗ
                 rest_text = raw_text[len(known_subj):].strip()
                 break
                 
-    # 2. Если точного совпадения нет, пробуем найти опечатку по первому слову
     if not subject and known_subjects:
         first_word = raw_text.split()[0]
         known_subjects_lower = {s.lower(): s for s in known_subjects}
@@ -99,7 +188,6 @@ async def cmd_add_dz(message: Message, command: CommandObject):
             subject = known_subjects_lower[matches[0]]
             rest_text = raw_text[len(first_word):].strip()
             
-    # 3. Если предмет всё равно не найден (ввели абракадабру)
     if not subject:
         subjects_list = ", ".join(known_subjects) if known_subjects else "Расписание пустое!"
         await message.answer(
@@ -114,7 +202,6 @@ async def cmd_add_dz(message: Message, command: CommandObject):
         await message.answer("❌ Вы указали предмет, но забыли написать само задание!")
         return
 
-    # Пробуем вытащить дату из оставшегося текста
     rest_parts = rest_text.split(maxsplit=1)
     target_date = None
     task = rest_text
@@ -126,7 +213,6 @@ async def cmd_add_dz(message: Message, command: CommandObject):
             target_date = parsed_date
             task = rest_parts[1]
             
-    # Если дату не указали, ищем следующий урок по расписанию
     if not target_date:
         target_date = await get_next_lesson_date(subject)
         if not target_date:
@@ -138,7 +224,8 @@ async def cmd_add_dz(message: Message, command: CommandObject):
             return
 
     try:
-        await add_homework(subject, task)
+        # ИСПРАВЛЕНО: добавлена передача target_date
+        await add_homework(subject, target_date, task)
         await message.answer(
             f"✅ Задание по предмету <b>{subject}</b> на <b>{target_date.strftime('%d.%m.%Y')}</b> сохранено:\n<i>{task}</i>", 
             parse_mode=ParseMode.HTML
@@ -174,7 +261,7 @@ async def cmd_del_dz(message: Message, command: CommandObject):
             rest_text = raw_text[len(first_word):].strip()
             
     if not subject:
-        subject = raw_text.split()[0] # Если не нашли, берем первое слово как есть
+        subject = raw_text.split()[0]
     
     target_date = None
     if rest_text:
@@ -187,7 +274,7 @@ async def cmd_del_dz(message: Message, command: CommandObject):
             return
             
     try:
-        await delete_homework(subject, target_date.isoformat())
+        await delete_homework(subject, target_date)
         await message.answer(f"🗑 Запись по предмету <b>{subject}</b> на <b>{target_date.strftime('%d.%m.%Y')}</b> удалена.", parse_mode=ParseMode.HTML)
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
@@ -199,129 +286,16 @@ async def cmd_list_dz(message: Message, command: CommandObject):
         await message.answer("❌ Неверный формат даты. Используйте: пн, завтра, 15.05")
         return
         
-    homework = await get_homework_for_date(target_date.isoformat())
+    homework = await get_homework_for_date(target_date)
     if not homework:
         await message.answer(f"На {target_date.strftime('%d.%m.%Y')} в базе нет добавленных вручную заданий.")
         return
         
     lines = [f"📋 Задания в базе на <b>{target_date.strftime('%d.%m.%Y')}</b>:"]
-    for subj, task in homework.items():
+    
+    # ИСПРАВЛЕНО: теперь мы получаем словарь со словарями (где есть task, photo_id, is_done)
+    for subj, hw_data in homework.items():
+        task = hw_data["task"]
         lines.append(f"🔸 <b>{subj}</b>: {task}")
+        
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
-# --- ШАГ 2: ИНТЕРАКТИВНОЕ ДОБАВЛЕНИЕ ДОМАШКИ ---
-
-# Создаем "состояния" (шаги), по которым пойдет пользователь
-class AddDzState(StatesGroup):
-    choosing_date = State()
-    choosing_subject = State()
-    writing_task = State()
-
-# 1. Пользователь пишет /add
-@router.message(Command("add"))
-async def cmd_add_interactive(message: Message, state: FSMContext):
-    # Создаем кнопки с датами
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="На завтра", callback_data="add_date_tomorrow")],
-        [InlineKeyboardButton(text="На послезавтра", callback_data="add_date_aftertomorrow")],
-        [InlineKeyboardButton(text="На понедельник", callback_data="add_date_monday")]
-    ])
-    await message.answer("📅 На какой день добавляем домашку?", reply_markup=kb)
-    # Переводим бота в режим ожидания выбора даты
-    await state.set_state(AddDzState.choosing_date)
-
-# 2. Пользователь нажал кнопку с датой
-@router.callback_query(AddDzState.choosing_date, F.data.startswith("add_date_"))
-async def process_add_date(callback: CallbackQuery, state: FSMContext):
-    action = callback.data.split("_")[2] # получаем 'tomorrow', 'aftertomorrow' или 'monday'
-    today = date.today()
-    
-    # Вычисляем нужную дату
-    if action == "tomorrow":
-        target_date = today + timedelta(days=1)
-    elif action == "aftertomorrow":
-        target_date = today + timedelta(days=2)
-    elif action == "monday":
-        days_ahead = 0 - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        target_date = today + timedelta(days=days_ahead)
-        
-    # Запоминаем дату в памяти бота
-    await state.update_data(target_date=target_date.isoformat())
-    
-    # Получаем предметы на этот день недели из базы данных
-    weekday = target_date.weekday()
-    subjects = await db.get_weekly_schedule(weekday)
-    
-    if not subjects:
-        await callback.message.edit_text(
-            f"На {target_date.strftime('%d.%m')} нет уроков по расписанию.\n"
-            f"Напиши название предмета вручную текстом:"
-        )
-        await state.set_state(AddDzState.choosing_subject)
-        return
-        
-    # Генерируем кнопки с предметами
-    kb_builder = []
-    for subj in subjects:
-        kb_builder.append([InlineKeyboardButton(text=subj, callback_data=f"add_subj_{subj}")])
-        
-    kb = InlineKeyboardMarkup(inline_keyboard=kb_builder)
-    await callback.message.edit_text(f"📅 Дата: {target_date.strftime('%d.%m')}\n📚 Выбери предмет:", reply_markup=kb)
-    # Переводим бота в режим ожидания выбора предмета
-    await state.set_state(AddDzState.choosing_subject)
-
-# 3. Пользователь нажал кнопку с предметом
-@router.callback_query(AddDzState.choosing_subject, F.data.startswith("add_subj_"))
-async def process_add_subject(callback: CallbackQuery, state: FSMContext):
-    subject = callback.data.replace("add_subj_", "")
-    await state.update_data(subject=subject) # Запоминаем предмет
-    
-    await callback.message.edit_text(
-        f"📚 Предмет: <b>{subject}</b>\n\n"
-        f"✍️ Напиши задание текстом ИЛИ отправь фотографию (можно сразу с подписью):",
-        parse_mode="HTML"
-    )
-    # Переводим бота в режим ожидания текста или фото
-    await state.set_state(AddDzState.writing_task)
-
-# 3.1. Если расписания нет, и пользователь написал предмет вручную
-@router.message(AddDzState.choosing_subject, F.text)
-async def process_manual_subject(message: Message, state: FSMContext):
-    subject = message.text.strip()
-    await state.update_data(subject=subject)
-    
-    await message.answer(
-        f"📚 Предмет: <b>{subject}</b>\n\n"
-        f"✍️ Напиши задание текстом ИЛИ отправь фотографию (можно сразу с подписью):",
-        parse_mode="HTML"
-    )
-    await state.set_state(AddDzState.writing_task)
-
-# 4. Пользователь прислал текст или фото с заданием
-@router.message(AddDzState.writing_task, F.photo | F.text)
-async def process_add_task(message: Message, state: FSMContext):
-    # Достаем сохраненные дату и предмет из памяти
-    data = await state.get_data()
-    target_date_str = data['target_date']
-    subject = data['subject']
-    
-    # Разбираемся, что прислал пользователь: фото или текст
-    if message.photo:
-        photo_id = message.photo[-1].file_id # Берем фото в лучшем качестве
-        task_text = message.caption or "Фотография" # Если есть подпись - берем ее
-    else:
-        photo_id = None
-        task_text = message.text
-        
-    # Сохраняем в базу данных!
-    await db.add_homework(subject, target_date_str, task_text, photo_id)
-    
-    await message.answer(
-        f"✅ Домашка по предмету <b>{subject}</b> на {target_date_str} успешно сохранена!",
-        parse_mode="HTML"
-    )
-    # Очищаем память бота, завершаем процесс
-    await state.clear()
-
-
