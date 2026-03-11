@@ -1,8 +1,25 @@
+
+
+
+# Убедись, что у тебя правильно импортирована база данных. 
+# Если твой файл называется database.py и лежит в папке db, то импорт выглядит так:
+# import db.database as db 
+# (или как он у тебя уже импортирован)
 from datetime import date, timedelta
 import re
 import difflib
 
-from aiogram import Router
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from datetime import date, timedelta
+
+# Убедись, что у тебя правильно импортирована база данных. 
+# Если твой файл называется database.py и лежит в папке db, то импорт выглядит так:
+# import db.database as db 
+# (или как он у тебя уже импортирован)
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from aiogram.enums import ParseMode
@@ -191,4 +208,120 @@ async def cmd_list_dz(message: Message, command: CommandObject):
     for subj, task in homework.items():
         lines.append(f"🔸 <b>{subj}</b>: {task}")
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+# --- ШАГ 2: ИНТЕРАКТИВНОЕ ДОБАВЛЕНИЕ ДОМАШКИ ---
+
+# Создаем "состояния" (шаги), по которым пойдет пользователь
+class AddDzState(StatesGroup):
+    choosing_date = State()
+    choosing_subject = State()
+    writing_task = State()
+
+# 1. Пользователь пишет /add
+@router.message(Command("add"))
+async def cmd_add_interactive(message: Message, state: FSMContext):
+    # Создаем кнопки с датами
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="На завтра", callback_data="add_date_tomorrow")],
+        [InlineKeyboardButton(text="На послезавтра", callback_data="add_date_aftertomorrow")],
+        [InlineKeyboardButton(text="На понедельник", callback_data="add_date_monday")]
+    ])
+    await message.answer("📅 На какой день добавляем домашку?", reply_markup=kb)
+    # Переводим бота в режим ожидания выбора даты
+    await state.set_state(AddDzState.choosing_date)
+
+# 2. Пользователь нажал кнопку с датой
+@router.callback_query(AddDzState.choosing_date, F.data.startswith("add_date_"))
+async def process_add_date(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split("_")[2] # получаем 'tomorrow', 'aftertomorrow' или 'monday'
+    today = date.today()
+    
+    # Вычисляем нужную дату
+    if action == "tomorrow":
+        target_date = today + timedelta(days=1)
+    elif action == "aftertomorrow":
+        target_date = today + timedelta(days=2)
+    elif action == "monday":
+        days_ahead = 0 - today.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        target_date = today + timedelta(days=days_ahead)
+        
+    # Запоминаем дату в памяти бота
+    await state.update_data(target_date=target_date.isoformat())
+    
+    # Получаем предметы на этот день недели из базы данных
+    weekday = target_date.weekday()
+    subjects = await db.get_weekly_schedule(weekday)
+    
+    if not subjects:
+        await callback.message.edit_text(
+            f"На {target_date.strftime('%d.%m')} нет уроков по расписанию.\n"
+            f"Напиши название предмета вручную текстом:"
+        )
+        await state.set_state(AddDzState.choosing_subject)
+        return
+        
+    # Генерируем кнопки с предметами
+    kb_builder = []
+    for subj in subjects:
+        kb_builder.append([InlineKeyboardButton(text=subj, callback_data=f"add_subj_{subj}")])
+        
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_builder)
+    await callback.message.edit_text(f"📅 Дата: {target_date.strftime('%d.%m')}\n📚 Выбери предмет:", reply_markup=kb)
+    # Переводим бота в режим ожидания выбора предмета
+    await state.set_state(AddDzState.choosing_subject)
+
+# 3. Пользователь нажал кнопку с предметом
+@router.callback_query(AddDzState.choosing_subject, F.data.startswith("add_subj_"))
+async def process_add_subject(callback: CallbackQuery, state: FSMContext):
+    subject = callback.data.replace("add_subj_", "")
+    await state.update_data(subject=subject) # Запоминаем предмет
+    
+    await callback.message.edit_text(
+        f"📚 Предмет: <b>{subject}</b>\n\n"
+        f"✍️ Напиши задание текстом ИЛИ отправь фотографию (можно сразу с подписью):",
+        parse_mode="HTML"
+    )
+    # Переводим бота в режим ожидания текста или фото
+    await state.set_state(AddDzState.writing_task)
+
+# 3.1. Если расписания нет, и пользователь написал предмет вручную
+@router.message(AddDzState.choosing_subject, F.text)
+async def process_manual_subject(message: Message, state: FSMContext):
+    subject = message.text.strip()
+    await state.update_data(subject=subject)
+    
+    await message.answer(
+        f"📚 Предмет: <b>{subject}</b>\n\n"
+        f"✍️ Напиши задание текстом ИЛИ отправь фотографию (можно сразу с подписью):",
+        parse_mode="HTML"
+    )
+    await state.set_state(AddDzState.writing_task)
+
+# 4. Пользователь прислал текст или фото с заданием
+@router.message(AddDzState.writing_task, F.photo | F.text)
+async def process_add_task(message: Message, state: FSMContext):
+    # Достаем сохраненные дату и предмет из памяти
+    data = await state.get_data()
+    target_date_str = data['target_date']
+    subject = data['subject']
+    
+    # Разбираемся, что прислал пользователь: фото или текст
+    if message.photo:
+        photo_id = message.photo[-1].file_id # Берем фото в лучшем качестве
+        task_text = message.caption or "Фотография" # Если есть подпись - берем ее
+    else:
+        photo_id = None
+        task_text = message.text
+        
+    # Сохраняем в базу данных!
+    await db.add_homework(subject, target_date_str, task_text, photo_id)
+    
+    await message.answer(
+        f"✅ Домашка по предмету <b>{subject}</b> на {target_date_str} успешно сохранена!",
+        parse_mode="HTML"
+    )
+    # Очищаем память бота, завершаем процесс
+    await state.clear()
+
 
