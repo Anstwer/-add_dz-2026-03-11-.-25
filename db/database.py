@@ -125,16 +125,9 @@ async def set_weekly_schedule(day: int, subjects_list: list):
         ''', (day, subjects_str))
         await db.commit()
 
-async def get_weekly_schedule(day: int) -> list:
-    """Получить список предметов для дня недели"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute('''
-            SELECT subjects FROM weekly_schedule WHERE day = ?
-        ''', (day,)) as cursor:
-            row = await cursor.fetchone()
-            if row and row[0]:
-                return row[0].split(',')
-            return []
+async def get_weekly_schedule(day_of_week: int) -> list[str]:
+    """Возвращает постоянное расписание из словаря WEEKLY_SCHEDULE"""
+    return WEEKLY_SCHEDULE.get(day_of_week, [])
 
 async def get_all_weekly_schedule() -> dict:
     """Получить всё еженедельное расписание"""
@@ -152,4 +145,5 @@ async def delete_weekly_schedule(day: int):
             DELETE FROM weekly_schedule WHERE day = ?
         ''', (day,))
         await db.commit()
+
 
