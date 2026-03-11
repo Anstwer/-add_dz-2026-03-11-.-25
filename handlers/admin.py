@@ -10,10 +10,9 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Импортируем функции из базы данных и сервисов (УБЕДИСЬ, ЧТО ТУТ ЕСТЬ toggle_is_done)
+# Импортируем функции из базы данных и сервисов
 from db.database import add_homework, delete_homework, get_homework_for_date, get_weekly_schedule, toggle_is_done, get_all_weekly_schedule
 from services.homework_service import get_next_lesson_date, get_all_known_subjects
-
 
 router = Router()
 
@@ -63,6 +62,7 @@ async def process_add_week_toggle(callback: CallbackQuery):
     offset = int(callback.data.split("_")[-1])
     kb = get_week_keyboard(week_offset=offset, action_prefix="add_date")
     await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer()
 
 @router.callback_query(AddDzState.choosing_date, F.data.startswith("add_date_"))
 async def process_add_date(callback: CallbackQuery, state: FSMContext):
@@ -80,19 +80,29 @@ async def process_add_date(callback: CallbackQuery, state: FSMContext):
             f"Напиши название предмета вручную текстом:"
         )
         await state.set_state(AddDzState.choosing_subject)
+        await callback.answer()
         return
         
     kb_builder = InlineKeyboardBuilder()
-    for subj in subjects:
-        kb_builder.button(text=subj, callback_data=f"add_subj_{subj}")
-    kb_builder.adjust(2) # Кнопки предметов по 2 в ряд
+    # ИСПОЛЬЗУЕМ ИНДЕКСЫ ВМЕСТО НАЗВАНИЙ, ЧТОБЫ НЕ ПРЕВЫСИТЬ ЛИМИТ TELEGRAM
+    for i, subj in enumerate(subjects):
+        kb_builder.button(text=subj, callback_data=f"add_subj_{i}")
+    kb_builder.adjust(2)
         
     await callback.message.edit_text(f"📅 Дата: <b>{target_date.strftime('%d.%m')}</b>\n📚 Выбери предмет:", reply_markup=kb_builder.as_markup(), parse_mode=ParseMode.HTML)
     await state.set_state(AddDzState.choosing_subject)
+    await callback.answer()
 
 @router.callback_query(AddDzState.choosing_subject, F.data.startswith("add_subj_"))
 async def process_add_subject(callback: CallbackQuery, state: FSMContext):
-    subject = callback.data.replace("add_subj_", "")
+    subj_index = int(callback.data.replace("add_subj_", ""))
+    
+    # Достаем предмет по индексу из расписания
+    data = await state.get_data()
+    target_date = date.fromisoformat(data['target_date'])
+    subjects = await get_weekly_schedule(target_date.weekday())
+    subject = subjects[subj_index]
+    
     await state.update_data(subject=subject)
     
     await callback.message.edit_text(
@@ -101,6 +111,7 @@ async def process_add_subject(callback: CallbackQuery, state: FSMContext):
         parse_mode=ParseMode.HTML
     )
     await state.set_state(AddDzState.writing_task)
+    await callback.answer()
 
 @router.message(AddDzState.choosing_subject, F.text)
 async def process_manual_subject(message: Message, state: FSMContext):
@@ -151,33 +162,40 @@ async def process_get_week_toggle(callback: CallbackQuery):
     offset = int(callback.data.split("_")[-1])
     kb = get_week_keyboard(week_offset=offset, action_prefix="get_date")
     await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer()
 
-# Вспомогательная функция для генерации сообщения с домашкой и кнопками-галочками
 async def render_dz_message(target_date: date):
     homework = await get_homework_for_date(target_date)
+    kb_builder = InlineKeyboardBuilder()
     
     if not homework:
-        return f"🎉 На <b>{target_date.strftime('%d.%m')}</b> домашки нет!", None, None
+        # Даже если домашки нет, оставляем кнопку "Назад"
+        kb_builder.row(InlineKeyboardButton(text="🔙 Назад к выбору дня", callback_data="back_to_dz_dates"))
+        return f"🎉 На <b>{target_date.strftime('%d.%m')}</b> домашки нет!", kb_builder.as_markup(), None
         
     lines = [f"📋 <b>Домашка на {target_date.strftime('%d.%m')}</b>:\n"]
-    kb_builder = InlineKeyboardBuilder()
     photo_id_to_send = None
     
-    for subj, hw_data in homework.items():
+    # Сортируем предметы по алфавиту, чтобы индексы всегда совпадали
+    subjects = list(homework.keys())
+    subjects.sort()
+    
+    for i, subj in enumerate(subjects):
+        hw_data = homework[subj]
         task = hw_data["task"]
         is_done = hw_data.get("is_done", 0)
         status = "✅" if is_done else "❌"
         lines.append(f"{status} <b>{subj}</b>: {task}")
         
-        # Создаем кнопку-галочку для предмета
+        # ИСПОЛЬЗУЕМ ИНДЕКС (i) ВМЕСТО НАЗВАНИЯ ПРЕДМЕТА
         btn_text = f"{status} {subj}"
-        cb_data = f"toggle_{target_date.isoformat()}_{subj}"
+        cb_data = f"t_{target_date.isoformat()}_{i}"
         kb_builder.button(text=btn_text, callback_data=cb_data)
         
         if not photo_id_to_send and hw_data.get("photo_id"):
             photo_id_to_send = hw_data["photo_id"]
             
-    kb_builder.adjust(2) # Кнопки-галочки по 2 в ряд
+    kb_builder.adjust(2)
     kb_builder.row(InlineKeyboardButton(text="🔙 Назад к выбору дня", callback_data="back_to_dz_dates"))
     
     return "\n".join(lines), kb_builder.as_markup(), photo_id_to_send
@@ -194,24 +212,34 @@ async def process_get_date(callback: CallbackQuery):
         await callback.message.answer_photo(photo=photo_id, caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
     else:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
 
-@router.callback_query(F.data.startswith("toggle_"))
+@router.callback_query(F.data.startswith("t_"))
 async def process_toggle_done(callback: CallbackQuery):
-    # Разбираем callback_data (например: toggle_2026-03-15_Алгебра)
-    parts = callback.data.split("_", 2)
+    parts = callback.data.split("_")
     target_date = date.fromisoformat(parts[1])
-    subject = parts[2]
+    subj_index = int(parts[2])
     
-    # Меняем статус в базе данных
-    await toggle_is_done(subject, target_date)
+    # Получаем список предметов и находим нужный по индексу
+    homework = await get_homework_for_date(target_date)
+    subjects = list(homework.keys())
+    subjects.sort()
     
-    # Перерисовываем сообщение с новыми галочками
+    if subj_index < len(subjects):
+        subject = subjects[subj_index]
+        await toggle_is_done(subject, target_date)
+    
     text, kb, _ = await render_dz_message(target_date)
     
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
-    else:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass # Игнорируем ошибку, если текст не изменился
+        
+    await callback.answer()
 
 @router.callback_query(F.data == "back_to_dz_dates")
 async def process_back_to_dz_dates(callback: CallbackQuery):
@@ -221,6 +249,7 @@ async def process_back_to_dz_dates(callback: CallbackQuery):
         await callback.message.answer("📅 На какой день показать домашку?", reply_markup=kb)
     else:
         await callback.message.edit_text("📅 На какой день показать домашку?", reply_markup=kb)
+    await callback.answer()
 
 
 # ==========================================
@@ -251,10 +280,6 @@ def parse_smart_date(date_str: str) -> date | None:
 
 @router.message(Command("add_dz"))
 async def cmd_add_dz(message: Message, command: CommandObject):
-    if not command.args:
-        await message.answer("❌ Используйте новую команду /add для удобного добавления!")
-        return
-    # ... (старая логика оставлена минимальной, лучше использовать /add)
     await message.answer("Пожалуйста, используйте новую удобную команду /add с кнопками!")
 
 @router.message(Command("del_dz"))
@@ -294,11 +319,10 @@ async def cmd_del_dz(message: Message, command: CommandObject):
 @router.message(Command("list_dz"))
 async def cmd_list_dz(message: Message, command: CommandObject):
     await message.answer("Пожалуйста, используйте новую удобную команду /dz с кнопками!")
+
 @router.message(Command("week"))
 async def cmd_week(message: Message):
-    # Получаем всё расписание из базы
     schedule = await get_all_weekly_schedule()
-    
     if not schedule:
         await message.answer("Расписание пока пустое!")
         return
@@ -306,14 +330,12 @@ async def cmd_week(message: Message):
     weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     text = "📅 <b>Расписание на неделю:</b>\n\n"
     
-    # Проходимся по всем дням недели
     for day_num in range(7):
         subjects = schedule.get(day_num, [])
-        if subjects: # Если в этот день есть уроки
+        if subjects:
             text += f"🔹 <b>{weekdays[day_num]}</b>\n"
             for i, subj in enumerate(subjects, 1):
                 text += f"  {i}. {subj}\n"
             text += "\n"
             
     await message.answer(text, parse_mode=ParseMode.HTML)
-
