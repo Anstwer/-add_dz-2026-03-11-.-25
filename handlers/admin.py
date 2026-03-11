@@ -11,8 +11,9 @@ from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # Импортируем функции из базы данных и сервисов (УБЕДИСЬ, ЧТО ТУТ ЕСТЬ toggle_is_done)
-from db.database import add_homework, delete_homework, get_homework_for_date, get_weekly_schedule, toggle_is_done
+from db.database import add_homework, delete_homework, get_homework_for_date, get_weekly_schedule, toggle_is_done, get_all_weekly_schedule
 from services.homework_service import get_next_lesson_date, get_all_known_subjects
+
 
 router = Router()
 
@@ -293,3 +294,26 @@ async def cmd_del_dz(message: Message, command: CommandObject):
 @router.message(Command("list_dz"))
 async def cmd_list_dz(message: Message, command: CommandObject):
     await message.answer("Пожалуйста, используйте новую удобную команду /dz с кнопками!")
+@router.message(Command("week"))
+async def cmd_week(message: Message):
+    # Получаем всё расписание из базы
+    schedule = await get_all_weekly_schedule()
+    
+    if not schedule:
+        await message.answer("Расписание пока пустое!")
+        return
+        
+    weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    text = "📅 <b>Расписание на неделю:</b>\n\n"
+    
+    # Проходимся по всем дням недели
+    for day_num in range(7):
+        subjects = schedule.get(day_num, [])
+        if subjects: # Если в этот день есть уроки
+            text += f"🔹 <b>{weekdays[day_num]}</b>\n"
+            for i, subj in enumerate(subjects, 1):
+                text += f"  {i}. {subj}\n"
+            text += "\n"
+            
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
