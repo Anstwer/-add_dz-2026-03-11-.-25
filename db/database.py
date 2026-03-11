@@ -58,7 +58,7 @@ async def add_homework(subject: str, hw_date: date, task: str):
             ON CONFLICT(subject, date) DO UPDATE SET
                 task = excluded.task,
                 updated_at = CURRENT_TIMESTAMP
-        ''', (subject, hw_date.isoformat(), task))
+        ''', (subject, hw_date, task))
         await db.commit()
 
 async def delete_homework(subject: str, hw_date: date):
@@ -145,5 +145,6 @@ async def delete_weekly_schedule(day: int):
             DELETE FROM weekly_schedule WHERE day = ?
         ''', (day,))
         await db.commit()
+
 
 
