@@ -121,7 +121,7 @@ async def cmd_add_dz(message: Message, command: CommandObject):
             return
 
     try:
-        await add_homework(subject, target_date.isoformat(), task)
+        await add_homework(subject, task)
         await message.answer(
             f"✅ Задание по предмету <b>{subject}</b> на <b>{target_date.strftime('%d.%m.%Y')}</b> сохранено:\n<i>{task}</i>", 
             parse_mode=ParseMode.HTML
@@ -191,3 +191,4 @@ async def cmd_list_dz(message: Message, command: CommandObject):
     for subj, task in homework.items():
         lines.append(f"🔸 <b>{subj}</b>: {task}")
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
