@@ -14,11 +14,37 @@ from db.database import add_homework, delete_homework, get_homework_for_date, ge
 router = Router()
 
 # ==========================================
-# КОМАНДА /week (РАБОТАЕТ ВСЕГДА)
+# УНИВЕРСАЛЬНАЯ КЛАВИАТУРА ДНЕЙ НЕДЕЛИ
+# ==========================================
+def get_week_keyboard(week_offset: int, action_prefix: str) -> InlineKeyboardMarkup:
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    start_date = monday + timedelta(weeks=week_offset)
+    
+    builder = InlineKeyboardBuilder()
+    weekdays_names = ["Пн", "Вт", "Ср", "Чт", "Пт"]
+    
+    for i in range(5):
+        day_date = start_date + timedelta(days=i)
+        btn_text = f"{weekdays_names[i]} ({day_date.strftime('%d.%m')})"
+        builder.button(text=btn_text, callback_data=f"{action_prefix}_{day_date.isoformat()}")
+        
+    builder.adjust(2, 2, 1)
+    
+    if week_offset == 0:
+        builder.row(InlineKeyboardButton(text="➡️ След. неделя", callback_data=f"{action_prefix}_week_1"))
+    else:
+        builder.row(InlineKeyboardButton(text="⬅️ Тек. неделя", callback_data=f"{action_prefix}_week_0"))
+        
+    return builder.as_markup()
+
+
+# ==========================================
+# КОМАНДА /week (РАСПИСАНИЕ)
 # ==========================================
 @router.message(Command("week"))
 async def cmd_week(message: Message, state: FSMContext):
-    await state.clear() # Сбрасываем любые зависания
+    await state.clear()
     
     schedule = await get_all_weekly_schedule()
     if not schedule:
@@ -46,7 +72,7 @@ async def cmd_week(message: Message, state: FSMContext):
 
 
 # ==========================================
-# ШАГ 3: УМНЫЙ ПРОСМОТР ДЗ (/dz) - ВСЁ В ОДНОМ
+# ШАГ 3: ПРОСМОТР ДЗ (/dz и /завтра)
 # ==========================================
 def get_smart_tomorrow() -> date:
     today = date.today()
@@ -59,7 +85,7 @@ async def render_dz_message(target_date: date):
     homework = await get_homework_for_date(target_date)
     kb_builder = InlineKeyboardBuilder()
     
-    # 1. ТЕКСТ И ГАЛОЧКИ
+    # 1. Текст и галочки
     if not homework:
         text = f"🎉 На <b>{target_date.strftime('%d.%m')}</b> домашки нет!"
         photo_id_to_send = None
@@ -76,16 +102,15 @@ async def render_dz_message(target_date: date):
             status = "✅" if is_done else "❌"
             lines.append(f"{status} <b>{subj}</b>: {task}")
             
-            # Кнопка-галочка
             kb_builder.button(text=f"{status} {subj}", callback_data=f"t_{target_date.isoformat()}_{i}")
             
             if not photo_id_to_send and hw_data.get("photo_id"):
                 photo_id_to_send = hw_data["photo_id"]
                 
         text = "\n".join(lines)
-        kb_builder.adjust(2) # Галочки по 2 в ряд
+        kb_builder.adjust(2)
 
-    # 2. КНОПКИ ДНЕЙ НЕДЕЛИ (Пн-Пт)
+    # 2. Кнопки дней недели внизу
     monday = target_date - timedelta(days=target_date.weekday())
     weekdays_names = ["Пн", "Вт", "Ср", "Чт", "Пт"]
     
@@ -100,20 +125,29 @@ async def render_dz_message(target_date: date):
     kb_builder.row(*day_buttons[2:4])
     kb_builder.row(day_buttons[4])
     
-    # 3. КНОПКИ ПЕРЕКЛЮЧЕНИЯ НЕДЕЛЬ
+    # 3. Кнопки переключения недель
     today_monday = date.today() - timedelta(days=date.today().weekday())
     week_offset = (monday - today_monday).days // 7
     
     if week_offset <= 0:
-        kb_builder.row(InlineKeyboardButton(text="➡️ След. неделя", callback_data=f"get_week_{week_offset + 1}"))
+        kb_builder.row(InlineKeyboardButton(text="➡️ След. неделя", callback_data=f"get_date_week_{week_offset + 1}"))
     else:
-        kb_builder.row(InlineKeyboardButton(text="⬅️ Тек. неделя", callback_data=f"get_week_{week_offset - 1}"))
+        kb_builder.row(InlineKeyboardButton(text="⬅️ Тек. неделя", callback_data=f"get_date_week_{week_offset - 1}"))
         
     return text, kb_builder.as_markup(), photo_id_to_send
 
-@router.message(Command("dz", "zavtra", "завтра"))
-async def cmd_get_dz_interactive(message: Message, state: FSMContext):
-    await state.clear() # Сбрасываем зависания
+# КОМАНДА /dz (Открывает меню выбора дня)
+@router.message(Command("dz"))
+async def cmd_dz_menu(message: Message, state: FSMContext):
+    await state.clear()
+    kb = get_week_keyboard(week_offset=0, action_prefix="get_date")
+    await message.answer("📅 Выберите день для просмотра ДЗ:", reply_markup=kb)
+
+# КОМАНДА /завтра (Сразу показывает ДЗ)
+@router.message(Command("zavtra"))
+@router.message(Command("завтра"))
+async def cmd_zavtra(message: Message, state: FSMContext):
+    await state.clear()
     target_date = get_smart_tomorrow()
     text, kb, photo_id = await render_dz_message(target_date)
     
@@ -122,15 +156,25 @@ async def cmd_get_dz_interactive(message: Message, state: FSMContext):
     else:
         await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-@router.callback_query(F.data.startswith("get_date_") | F.data.startswith("get_week_") | F.data.startswith("t_"))
+# ОБРАБОТЧИК КНОПОК ПРОСМОТРА
+@router.callback_query(F.data.startswith("get_date_") | F.data.startswith("t_"))
 async def process_dz_callbacks(callback: CallbackQuery):
-    # Определяем, что нажал пользователь
+    # Если нажали переключение недели в главном меню /dz
+    if callback.data.startswith("get_date_week_"):
+        offset = int(callback.data.replace("get_date_week_", ""))
+        kb = get_week_keyboard(week_offset=offset, action_prefix="get_date")
+        if callback.message.photo:
+            await callback.message.delete()
+            await callback.message.answer("📅 Выберите день для просмотра ДЗ:", reply_markup=kb)
+        else:
+            await callback.message.edit_text("📅 Выберите день для просмотра ДЗ:", reply_markup=kb)
+        await callback.answer()
+        return
+
+    # Если выбрали конкретный день
     if callback.data.startswith("get_date_"):
         target_date = date.fromisoformat(callback.data.replace("get_date_", ""))
-    elif callback.data.startswith("get_week_"):
-        offset = int(callback.data.replace("get_week_", ""))
-        today_monday = date.today() - timedelta(days=date.today().weekday())
-        target_date = today_monday + timedelta(weeks=offset) # Показываем понедельник выбранной недели
+    # Если нажали на галочку
     elif callback.data.startswith("t_"):
         parts = callback.data.split("_")
         target_date = date.fromisoformat(parts[1])
@@ -142,7 +186,6 @@ async def process_dz_callbacks(callback: CallbackQuery):
         if subj_index < len(subjects):
             await toggle_is_done(subjects[subj_index], target_date)
 
-    # Перерисовываем сообщение
     text, kb, photo_id = await render_dz_message(target_date)
     
     try:
@@ -172,39 +215,17 @@ class AddDzState(StatesGroup):
     choosing_subject = State()
     writing_task = State()
 
-def get_add_week_keyboard(week_offset: int) -> InlineKeyboardMarkup:
-    today = date.today()
-    monday = today - timedelta(days=today.weekday())
-    start_date = monday + timedelta(weeks=week_offset)
-    
-    builder = InlineKeyboardBuilder()
-    weekdays_names = ["Пн", "Вт", "Ср", "Чт", "Пт"]
-    
-    for i in range(5):
-        day_date = start_date + timedelta(days=i)
-        btn_text = f"{weekdays_names[i]} ({day_date.strftime('%d.%m')})"
-        builder.button(text=btn_text, callback_data=f"add_date_{day_date.isoformat()}")
-        
-    builder.adjust(2, 2, 1)
-    
-    if week_offset == 0:
-        builder.row(InlineKeyboardButton(text="➡️ След. неделя", callback_data="add_week_1"))
-    else:
-        builder.row(InlineKeyboardButton(text="⬅️ Тек. неделя", callback_data="add_week_0"))
-        
-    return builder.as_markup()
-
 @router.message(Command("add"))
 async def cmd_add_interactive(message: Message, state: FSMContext):
     await state.clear()
-    kb = get_add_week_keyboard(week_offset=0)
+    kb = get_week_keyboard(week_offset=0, action_prefix="add_date")
     await message.answer("📅 На какой день добавляем домашку?", reply_markup=kb)
     await state.set_state(AddDzState.choosing_date)
 
-@router.callback_query(AddDzState.choosing_date, F.data.startswith("add_week_"))
+@router.callback_query(AddDzState.choosing_date, F.data.startswith("add_date_week_"))
 async def process_add_week_toggle(callback: CallbackQuery):
-    offset = int(callback.data.split("_")[-1])
-    kb = get_add_week_keyboard(week_offset=offset)
+    offset = int(callback.data.replace("add_date_week_", ""))
+    kb = get_week_keyboard(week_offset=offset, action_prefix="add_date")
     await callback.message.edit_reply_markup(reply_markup=kb)
     await callback.answer()
 
@@ -289,11 +310,3 @@ async def process_add_task(message: Message, state: FSMContext):
         parse_mode=ParseMode.HTML
     )
     await state.clear()
-
-
-# ==========================================
-# СТАРЫЕ КОМАНДЫ (Оставлены как заглушки)
-# ==========================================
-@router.message(Command("add_dz", "del_dz", "list_dz"))
-async def cmd_old_commands(message: Message):
-    await message.answer("❌ Эти команды устарели.\nИспользуйте удобные кнопки:\n/add — добавить ДЗ\n/dz — посмотреть ДЗ")
