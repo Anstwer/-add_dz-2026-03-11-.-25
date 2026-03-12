@@ -15,6 +15,33 @@ from db.database import add_homework, delete_homework, get_homework_for_date, ge
 from services.homework_service import get_next_lesson_date, get_all_known_subjects
 
 router = Router()
+@router.message(Command("week"))
+async def cmd_week(message: Message, state: FSMContext):
+    # 1. Сбрасываем любые зависшие состояния (например, если не дописали /add)
+    await state.clear() 
+    
+    weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    text = "📅 <b>Расписание на неделю:</b>\n\n"
+    
+    has_lessons = False
+    
+    # 2. Проходимся по всем 7 дням недели
+    for day_num in range(7):
+        # Берем расписание напрямую из твоего словаря WEEKLY_SCHEDULE
+        subjects = await get_weekly_schedule(day_num)
+        
+        if subjects:
+            has_lessons = True
+            text += f"🔹 <b>{weekdays[day_num]}</b>\n"
+            for i, subj in enumerate(subjects, 1):
+                text += f"  {i}. {subj}\n"
+            text += "\n"
+            
+    if not has_lessons:
+        await message.answer("Расписание пока пустое!")
+        return
+        
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 # ==========================================
 # ГЕНЕРАТОР КЛАВИАТУРЫ (5 ДНЕЙ + ПЕРЕКЛЮЧЕНИЕ)
@@ -357,4 +384,5 @@ async def cmd_week(message: Message):
             text += "\n"
             
     await message.answer(text, parse_mode=ParseMode.HTML)
+
 
