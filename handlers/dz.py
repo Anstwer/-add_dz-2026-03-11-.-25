@@ -22,26 +22,39 @@ class AddDzState(StatesGroup):
 # 1. ВСЕ КОМАНДЫ (ОБЯЗАТЕЛЬНО СВЕРХУ!)
 # ==========================================
 
-@router.message(Command("week"))
+
+@router.message(Command("week"), StateFilter("*"))
 async def cmd_week(message: Message, state: FSMContext):
     await state.clear()
     schedule = await get_all_weekly_schedule()
+    
+    if not schedule:
+        await message.answer("Расписание пока пустое!")
+        return
+        
     weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     text = "📅 <b>Расписание на неделю:</b>\n\n"
+    
     has_lessons = False
     for day_num in range(7):
         subjects = schedule.get(day_num, [])
         if subjects:
             has_lessons = True
             text += f"🔹 <b>{weekdays[day_num]}</b>\n"
+            
+            # Собираем предметы в отдельный блок
+            block_text = ""
             for i, subj in enumerate(subjects, 1):
-                text += f"  {i}. {subj}\n"
-            text += "\n"
+                block_text += f"{i}. {subj}\n"
+                
+            # Оборачиваем блок в тег <pre> для черного фона
+            text += f"<pre>{block_text}</pre>\n"
+            
     if not has_lessons:
         await message.answer("Расписание пока пустое!")
         return
+        
     await message.answer(text, parse_mode=ParseMode.HTML)
-
 @router.message(Command("dz"))
 async def cmd_dz_menu(message: Message, state: FSMContext):
     await state.clear()
@@ -103,13 +116,12 @@ async def render_dz_message(target_date: date):
     homework_db = await get_homework_for_date(target_date)
     
     kb_builder = InlineKeyboardBuilder()
+    photo_id_to_send = None
     
     if not schedule_subjects and not homework_db:
         text = f"🎉 На <b>{target_date.strftime('%d.%m')}</b> уроков нет!"
-        photo_id_to_send = None
     else:
-        lines = [f"📋 <b>Домашка на {target_date.strftime('%d.%m')}</b>:\n"]
-        photo_id_to_send = None
+        header = f"📋 <b>Домашка на {target_date.strftime('%d.%m')}</b>:\n"
         
         all_subjects = []
         for subj in schedule_subjects:
@@ -117,45 +129,33 @@ async def render_dz_message(target_date: date):
         for subj in homework_db.keys():
             if subj not in all_subjects: all_subjects.append(subj)
                 
+        hw_lines = []
         for i, subj in enumerate(all_subjects):
             hw_data = homework_db.get(subj, {})
             task = hw_data.get("task", "Не задано")
             is_done = hw_data.get("is_done", 0)
             status = "✅" if is_done else "❌"
             
-            lines.append(f"{status} <b>{subj}</b>: {task}")
+            # Убрали теги <b> изнутри <pre>, чтобы текст отображался ровно
+            hw_lines.append(f"{status} {subj}: {task}")
             kb_builder.button(text=f"{status} {subj}", callback_data=f"t_{target_date.isoformat()}_{i}")
             
             if not photo_id_to_send and hw_data.get("photo_id"):
                 photo_id_to_send = hw_data["photo_id"]
                 
-        text = "\n".join(lines)
+        # Оборачиваем список домашки в <pre> для черного фона
+        text = header + "<pre>" + "\n".join(hw_lines) + "</pre>"
         kb_builder.adjust(2)
 
     monday = target_date - timedelta(days=target_date.weekday())
-    weekdays_names = ["Пн", "Вт", "Ср", "Чт", "Пт"]
-    
-    day_buttons = []
-    for i in range(5):
-        day_date = monday + timedelta(days=i)
-        marker = "🔘 " if day_date == target_date else ""
-        btn_text = f"{marker}{weekdays_names[i]} ({day_date.strftime('%d.%m')})"
-        day_buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"get_date_{day_date.isoformat()}"))
-    
-    kb_builder.row(*day_buttons[:2])
-    kb_builder.row(*day_buttons[2:4])
-    kb_builder.row(day_buttons[4])
-    
     today_monday = date.today() - timedelta(days=date.today().weekday())
     week_offset = (monday - today_monday).days // 7
     
-    if week_offset <= 0:
-        kb_builder.row(InlineKeyboardButton(text="➡️ След. неделя", callback_data=f"get_date_week_{week_offset + 1}"))
-    else:
-        kb_builder.row(InlineKeyboardButton(text="⬅️ Тек. неделя", callback_data=f"get_date_week_{week_offset - 1}"))
+    nav_kb = get_week_keyboard(week_offset, "get_date", current_date=target_date)
+    for row in nav_kb.inline_keyboard:
+        kb_builder.row(*row)
         
     return text, kb_builder.as_markup(), photo_id_to_send
-
 # ==========================================
 # 3. ОБРАБОТЧИКИ КНОПОК ПРОСМОТРА (/dz)
 # ==========================================
@@ -314,3 +314,4 @@ async def process_add_task(message: Message, state: FSMContext):
         parse_mode=ParseMode.HTML
     )
     await state.clear()
+
