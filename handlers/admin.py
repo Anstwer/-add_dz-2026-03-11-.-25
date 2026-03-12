@@ -152,31 +152,32 @@ async def process_add_task(message: Message, state: FSMContext):
 # ==========================================
 # ШАГ 3: ИНТЕРАКТИВНЫЙ ПРОСМОТР И ГАЛОЧКИ (/dz)
 # ==========================================
-@router.message(Command("dz"))
-async def cmd_get_dz_interactive(message: Message):
-    kb = get_week_keyboard(week_offset=0, action_prefix="get_date")
-    await message.answer("📅 На какой день показать домашку?", reply_markup=kb)
+# ==========================================
+# ШАГ 3: ИНТЕРАКТИВНЫЙ ПРОСМОТР И ГАЛОЧКИ (/dz)
+# ==========================================
 
-@router.callback_query(F.data.startswith("get_date_week_"))
-async def process_get_week_toggle(callback: CallbackQuery):
-    offset = int(callback.data.split("_")[-1])
-    kb = get_week_keyboard(week_offset=offset, action_prefix="get_date")
-    await callback.message.edit_reply_markup(reply_markup=kb)
-    await callback.answer()
+# Умное вычисление завтрашнего учебного дня
+def get_smart_tomorrow() -> date:
+    today = date.today()
+    # Если сегодня пятница (4) или суббота (5), то "завтра" для школы — это понедельник
+    if today.weekday() == 4:
+        return today + timedelta(days=3)
+    elif today.weekday() == 5:
+        return today + timedelta(days=2)
+    else:
+        return today + timedelta(days=1)
 
 async def render_dz_message(target_date: date):
     homework = await get_homework_for_date(target_date)
     kb_builder = InlineKeyboardBuilder()
     
     if not homework:
-        # Даже если домашки нет, оставляем кнопку "Назад"
-        kb_builder.row(InlineKeyboardButton(text="🔙 Назад к выбору дня", callback_data="back_to_dz_dates"))
+        kb_builder.row(InlineKeyboardButton(text="📅 Выбрать другой день", callback_data="back_to_dz_dates"))
         return f"🎉 На <b>{target_date.strftime('%d.%m')}</b> домашки нет!", kb_builder.as_markup(), None
         
     lines = [f"📋 <b>Домашка на {target_date.strftime('%d.%m')}</b>:\n"]
     photo_id_to_send = None
     
-    # Сортируем предметы по алфавиту, чтобы индексы всегда совпадали
     subjects = list(homework.keys())
     subjects.sort()
     
@@ -187,7 +188,6 @@ async def render_dz_message(target_date: date):
         status = "✅" if is_done else "❌"
         lines.append(f"{status} <b>{subj}</b>: {task}")
         
-        # ИСПОЛЬЗУЕМ ИНДЕКС (i) ВМЕСТО НАЗВАНИЯ ПРЕДМЕТА
         btn_text = f"{status} {subj}"
         cb_data = f"t_{target_date.isoformat()}_{i}"
         kb_builder.button(text=btn_text, callback_data=cb_data)
@@ -196,9 +196,28 @@ async def render_dz_message(target_date: date):
             photo_id_to_send = hw_data["photo_id"]
             
     kb_builder.adjust(2)
-    kb_builder.row(InlineKeyboardButton(text="🔙 Назад к выбору дня", callback_data="back_to_dz_dates"))
+    # Кнопка для перехода к выбору недели
+    kb_builder.row(InlineKeyboardButton(text="📅 Выбрать другой день", callback_data="back_to_dz_dates"))
     
     return "\n".join(lines), kb_builder.as_markup(), photo_id_to_send
+
+# Теперь /dz СРАЗУ показывает завтрашний день
+@router.message(Command("dz", "zavtra", "завтра"))
+async def cmd_get_dz_interactive(message: Message):
+    target_date = get_smart_tomorrow()
+    text, kb, photo_id = await render_dz_message(target_date)
+    
+    if photo_id:
+        await message.answer_photo(photo=photo_id, caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("get_date_week_"))
+async def process_get_week_toggle(callback: CallbackQuery):
+    offset = int(callback.data.split("_")[-1])
+    kb = get_week_keyboard(week_offset=offset, action_prefix="get_date")
+    await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("get_date_"))
 async def process_get_date(callback: CallbackQuery):
@@ -220,7 +239,6 @@ async def process_toggle_done(callback: CallbackQuery):
     target_date = date.fromisoformat(parts[1])
     subj_index = int(parts[2])
     
-    # Получаем список предметов и находим нужный по индексу
     homework = await get_homework_for_date(target_date)
     subjects = list(homework.keys())
     subjects.sort()
@@ -237,7 +255,7 @@ async def process_toggle_done(callback: CallbackQuery):
         else:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     except Exception:
-        pass # Игнорируем ошибку, если текст не изменился
+        pass 
         
     await callback.answer()
 
@@ -339,3 +357,4 @@ async def cmd_week(message: Message):
             text += "\n"
             
     await message.answer(text, parse_mode=ParseMode.HTML)
+
