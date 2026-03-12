@@ -3,7 +3,7 @@ from datetime import date, timedelta
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ParseMode
@@ -314,4 +314,5 @@ async def process_add_task(message: Message, state: FSMContext):
         parse_mode=ParseMode.HTML
     )
     await state.clear()
+
 
